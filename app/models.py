@@ -242,8 +242,6 @@ class TimeSlot(EmbeddedDocument):
 class Timesheet(Document):
     employee = ReferenceField('Employe', required=True)
     date = DateTimeField(required=True)
-    login_time = DateTimeField()
-    logout_time = DateTimeField()
     status = StringField(choices=['Pending', 'Approved', 'Rejected'], default='Pending')
     remarks = StringField()
     approved_by = ReferenceField(Admin)

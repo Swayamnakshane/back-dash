@@ -461,81 +461,6 @@ class GetMeetings(MethodView):
                 "error": str(e)
             }), 500
 
-# class UploadDocumentAPI(MethodView):
-#     @jwt_required()
-#     def post(self):
-#         user_id = get_jwt_identity()
-#         employee = Employe.objects(id=user_id).first()
-#         if not employee:
-#             return jsonify({"error": "Employee not found"}), 404
-
-#         if 'file' not in request.files:
-#             return jsonify({"error": "No file uploaded"}), 400
-
-#         file = request.files['file']
-#         data = request.form.to_dict()
-
-#         if not all(k in data for k in ("document_type", "document_name")):
-#             return jsonify({"error": "Missing required fields"}), 400
-
-#         extension = file.filename.split('.')[-1]
-#         file_size_kb = len(file.read()) // 1024
-#         file.seek(0)
-
-#         # Assume you uploaded the file and got URL (pseudo logic)
-#         file_url = f"https://your-bucket.s3.amazonaws.com/{file.filename}"
-
-#         doc = DocumentUpload(
-#             employee_id=employee.employee_id,
-#             document_type=data['document_type'],
-#             document_name=data['document_name'],
-#             document_url=file_url,
-#             file_size_kb=file_size_kb,
-#             file_extension=f".{extension}",
-#             uploaded_by=employee
-#         )
-#         doc.save()
-
-#         return jsonify({"message": "✅ Document uploaded successfully."}), 201
-    
-# class GetDocumentsAPI(MethodView):
-#     @jwt_required()
-#     def get(self):
-#         employee_id = get_jwt_identity()
-#         employee = Employe.objects(id=employee_id).first()
-#         if not employee:
-#             return jsonify({"error": "Employee not found"}), 404
-
-#         docs = DocumentUpload.objects(employee_id=employee.employee_id, is_active=True)
-#         result = [{
-#             "document_id": str(d.id),
-#             "document_type": d.document_type,
-#             "document_name": d.document_name,
-#             "document_url": d.document_url,
-#             "file_size_kb": d.file_size_kb,
-#             "file_extension": d.file_extension,
-#             "verification_status": d.verification_status,
-#             "uploaded_at": d.uploaded_at.strftime("%d-%m-%Y %H:%M")
-#         } for d in docs]
-
-#         return jsonify({"documents": result}), 200
-
-# class DeleteDocumentAPI(MethodView):
-#     @jwt_required()
-#     def delete(self, doc_id):
-#         user_id = get_jwt_identity()
-#         employee = Employe.objects(id=user_id).first()
-#         if not employee:
-#             return jsonify({"error": "Employee not found"}), 404
-
-#         doc = DocumentUpload.objects(id=doc_id, uploaded_by=employee).first()
-#         if not doc:
-#             return jsonify({"error": "Document not found"}), 404
-
-#         doc.is_active = False
-#         doc.save()
-
-#         return jsonify({"message": "🗑️ Document removed successfully."}), 200
 
 class UploadDocumentAPI(MethodView):
     @jwt_required()
@@ -697,8 +622,7 @@ class GetBankDetailsAPI(MethodView):
             "message": "✅ Bank details retrieved."
         }), 200
 
-from datetime import datetime, timedelta
-
+from datetime import timedelta
 
 class AddTimesheet(MethodView):
     @jwt_required()
@@ -709,53 +633,70 @@ class AddTimesheet(MethodView):
             return jsonify({"error": "Employee not found"}), 404
 
         data = request.get_json()
-        required_fields = {"login_time", "logout_time", "time_slots"}
-
-        if not required_fields.issubset(data):
-            return jsonify({"error": f"Missing fields: {', '.join(required_fields - data.keys())}"}), 400
+        required_fields = {"date", "time_slots"}
+        
+        if not required_fields.issubset(data.keys()):
+            missing = required_fields - data.keys()
+            return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
 
         try:
-            login_time = datetime.fromisoformat(data["login_time"])
-            logout_time = datetime.fromisoformat(data["logout_time"])
-            if logout_time <= login_time:
-                return jsonify({"error": "Logout time must be after login time."}), 400
+            # Parse date from string
+            date = datetime.strptime(data["date"], "%Y-%m-%d").date()
         except ValueError:
-            return jsonify({"error": "Invalid datetime format. Use ISO format."}), 400
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD."}), 400
+
+        # Check for existing timesheet
+        existing = Timesheet.objects(employee=employee, date=date).first()
+        if existing:
+            return jsonify({"error": "Timesheet for this date already exists. Please update instead."}), 400
 
         time_slots = []
         total_seconds = 0
 
         for slot in data["time_slots"]:
             try:
-                start = datetime.fromisoformat(slot["start_time"])
-                end = datetime.fromisoformat(slot["end_time"])
+                # Parse start and end times
+                start = datetime.strptime(slot["start_time"], "%H:%M").time()
+                end = datetime.strptime(slot["end_time"], "%H:%M").time()
                 description = slot["description"]
 
+                # Validate time slot
                 if end <= start:
                     return jsonify({"error": "Time slot end time must be after start time."}), 400
-
-                time_slots.append(TimeSlot(start_time=start, end_time=end, description=description))
-                total_seconds += (end - start).total_seconds()
-            except (KeyError, ValueError):
-                return jsonify({"error": "Each time slot must include valid start_time, end_time, and description."}), 400
+                
+                # Create datetime objects for calculation
+                start_dt = datetime.combine(date, start)
+                end_dt = datetime.combine(date, end)
+                
+                # Calculate duration
+                duration = (end_dt - start_dt).total_seconds()
+                if duration <= 0:
+                    return jsonify({"error": "Invalid time slot duration"}), 400
+                
+                time_slots.append(TimeSlot(
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    description=description
+                ))
+                total_seconds += duration
+            except (KeyError, ValueError) as e:
+                return jsonify({"error": f"Invalid time slot: {str(e)}"}), 400
 
         total_hours = round(total_seconds / 3600, 2)
 
-        existing = Timesheet.objects(employee=employee, date=login_time.date()).first()
-        if existing:
-            return jsonify({"error": "Timesheet for this date already exists. Please update instead."}), 400
-
         timesheet = Timesheet(
             employee=employee,
-            date=login_time.date(),
-            login_time=login_time,
-            logout_time=logout_time,
+            date=date,
             time_slots=time_slots,
             total_hours=total_hours
         )
         timesheet.save()
 
-        return jsonify({"message": "✅ Timesheet added successfully", "total_hours": total_hours}), 201
+        return jsonify({
+            "message": "✅ Timesheet added successfully",
+            "timesheet_id": str(timesheet.id),
+            "total_hours": total_hours
+        }), 201
 
 
 class UpdateTimesheet(MethodView):
@@ -767,16 +708,16 @@ class UpdateTimesheet(MethodView):
             return jsonify({"error": "Employee not found"}), 404
 
         data = request.get_json()
-        required_fields = {"date", "login_time", "logout_time", "time_slots"}
-        if not required_fields.issubset(data):
-            return jsonify({"error": f"Missing fields: {', '.join(required_fields - data.keys())}"}), 400
+        required_fields = {"date", "time_slots"}
+        
+        if not required_fields.issubset(data.keys()):
+            missing = required_fields - data.keys()
+            return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
 
         try:
             date = datetime.strptime(data["date"], "%Y-%m-%d").date()
-            login_time = datetime.fromisoformat(data["login_time"])
-            logout_time = datetime.fromisoformat(data["logout_time"])
         except ValueError:
-            return jsonify({"error": "Invalid datetime format."}), 400
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD."}), 400
 
         timesheet = Timesheet.objects(employee=employee, date=date).first()
         if not timesheet:
@@ -790,27 +731,45 @@ class UpdateTimesheet(MethodView):
 
         for slot in data["time_slots"]:
             try:
-                start = datetime.fromisoformat(slot["start_time"])
-                end = datetime.fromisoformat(slot["end_time"])
+                # Parse start and end times
+                start = datetime.strptime(slot["start_time"], "%H:%M").time()
+                end = datetime.strptime(slot["end_time"], "%H:%M").time()
                 description = slot["description"]
 
+                # Validate time slot
                 if end <= start:
                     return jsonify({"error": "Time slot end time must be after start time."}), 400
+                
+                # Create datetime objects for calculation
+                start_dt = datetime.combine(date, start)
+                end_dt = datetime.combine(date, end)
+                
+                # Calculate duration
+                duration = (end_dt - start_dt).total_seconds()
+                if duration <= 0:
+                    return jsonify({"error": "Invalid time slot duration"}), 400
+                
+                time_slots.append(TimeSlot(
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    description=description
+                ))
+                total_seconds += duration
+            except (KeyError, ValueError) as e:
+                return jsonify({"error": f"Invalid time slot: {str(e)}"}), 400
 
-                time_slots.append(TimeSlot(start_time=start, end_time=end, description=description))
-                total_seconds += (end - start).total_seconds()
-            except (KeyError, ValueError):
-                return jsonify({"error": "Invalid or missing time slot fields."}), 400
+        total_hours = round(total_seconds / 3600, 2)
 
-        timesheet.login_time = login_time
-        timesheet.logout_time = logout_time
         timesheet.time_slots = time_slots
-        timesheet.total_hours = round(total_seconds / 3600, 2)
-        timesheet.status = "Pending"
-        timesheet.updated_at = datetime.now()
+        timesheet.total_hours = total_hours
+        timesheet.status = "Pending"  # Reset status on update
+        timesheet.updated_at = datetime.utcnow()
         timesheet.save()
 
-        return jsonify({"message": "✅ Timesheet updated successfully", "total_hours": timesheet.total_hours}), 200
+        return jsonify({
+            "message": "✅ Timesheet updated successfully",
+            "total_hours": total_hours
+        }), 200
 
 
 class DailyTimesheet(MethodView):
@@ -823,7 +782,7 @@ class DailyTimesheet(MethodView):
 
         date_str = request.args.get("date")
         if not date_str:
-            date_obj = datetime.now().date()
+            date_obj = datetime.utcnow().date()
         else:
             try:
                 date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -834,6 +793,7 @@ class DailyTimesheet(MethodView):
         if not timesheet:
             return jsonify({"message": "No timesheet entry found for this day."}), 404
 
+        # Format time slots with start/end times only
         tasks = [
             {
                 "start_time": slot.start_time.strftime("%H:%M"),
@@ -845,8 +805,6 @@ class DailyTimesheet(MethodView):
 
         return jsonify({
             "date": date_obj.strftime("%Y-%m-%d"),
-            "login_time": timesheet.login_time.strftime("%H:%M") if timesheet.login_time else None,
-            "logout_time": timesheet.logout_time.strftime("%H:%M") if timesheet.logout_time else None,
             "total_hours": timesheet.total_hours,
             "status": timesheet.status,
             "tasks": tasks
@@ -861,18 +819,33 @@ class SummaryTimesheet(MethodView):
         if not employee:
             return jsonify({"error": "Employee not found"}), 404
 
-        today = datetime.now()
-        start_of_week = datetime.combine(today - timedelta(days=today.weekday()), datetime.min.time())
-        start_of_month = datetime.combine(today.replace(day=1), datetime.min.time())
+        today = datetime.utcnow()
+        start_of_week = today - timedelta(days=today.weekday())
+        start_of_month = today.replace(day=1)
 
-        weekly_sheets = Timesheet.objects(employee=employee, date__gte=start_of_week)
-        monthly_sheets = Timesheet.objects(employee=employee, date__gte=start_of_month)
+        # Get timesheets for current week
+        weekly_sheets = Timesheet.objects(
+            employee=employee,
+            date__gte=start_of_week.date(),
+            date__lte=today.date()
+        )
+
+        # Get timesheets for current month
+        monthly_sheets = Timesheet.objects(
+            employee=employee,
+            date__gte=start_of_month.date(),
+            date__lte=today.date()
+        )
 
         weekly_hours = sum(ts.total_hours for ts in weekly_sheets)
         monthly_hours = sum(ts.total_hours for ts in monthly_sheets)
 
-        avg_weekly = round(weekly_hours / 7, 2)
-        avg_monthly = round(monthly_hours / today.day, 2)
+        # Calculate averages
+        days_in_week = min(7, (today.date() - start_of_week.date()).days + 1)
+        days_in_month = today.day
+        
+        avg_weekly = round(weekly_hours / days_in_week, 2) if days_in_week > 0 else 0
+        avg_monthly = round(monthly_hours / days_in_month, 2) if days_in_month > 0 else 0
 
         return jsonify({
             "weekly_total": round(weekly_hours, 2),

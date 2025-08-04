@@ -12,18 +12,20 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    # ✅ Initialize MongoDB
+    # MongoDB connection
     connect(host=app.config['MONGODB_SETTINGS']['host'])
 
-    # ✅ CORS and JWT
-    CORS(app, supports_credentials=True, origins="*")
+    # ✅ Allow all origins
+    CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+    # JWT Setup
     jwt = JWTManager(app)
 
-    # ✅ Register Blueprints
+    # Register Blueprints
     app.register_blueprint(admin_bp, url_prefix='/admin')
     app.register_blueprint(employee_bp, url_prefix='/employee')
 
-    # ✅ JWT Error Handlers
+    # JWT Error Handlers
     @app.errorhandler(NoAuthorizationError)
     def handle_missing_token(e):
         return jsonify({'error': 'Token is missing or expired.'}), 401
