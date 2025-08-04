@@ -57,7 +57,7 @@ admin_bp.add_url_rule(
 admin_bp.add_url_rule(
     "/UpdateStatusDocumentUpload/<document_id>",
     view_func=admin_views.UpdateStatusDocumentUpload.as_view("update_status_document_upload_api"),
-    methods=["GET"]
+    methods=["PUT"]
 )
 
 
